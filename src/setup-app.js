@@ -249,13 +249,18 @@
   var convosSetupBtn = document.getElementById('convos-setup-btn');
   var convosCopyBtn = document.getElementById('convos-copy-btn');
   var convosResultEl = document.getElementById('convos-result');
+  var convosSetupInProgress = false;
 
   function checkConvosStatus() {
     if (!convosStatusEl) return;
+    // Don't overwrite status while setup is in progress
+    if (convosSetupInProgress) return;
     convosStatusEl.textContent = 'Checking status...';
     convosStatusEl.style.background = '#f5f5f5';
 
     httpJson('/setup/api/convos/status').then(function (data) {
+      // Check again in case setup started while request was in flight
+      if (convosSetupInProgress) return;
       if (data.configured) {
         var shortId = data.ownerConversationId ? data.ownerConversationId.slice(0, 12) + '...' : '';
         convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Convos configured (conversation: ' + shortId + ')';
@@ -264,12 +269,14 @@
         convosStatusEl.innerHTML = '<span style="color: orange;">&#x25CB;</span> Not configured';
       }
     }).catch(function (err) {
+      if (convosSetupInProgress) return;
       convosStatusEl.innerHTML = '<span style="color: red;">&#x2717;</span> Error checking status';
     });
   }
 
   function setupConvosChannel() {
     if (!convosSetupBtn || !convosStatusEl) return;
+    convosSetupInProgress = true;
     var nameEl = document.getElementById('convos-name');
     var envEl = document.getElementById('convos-env');
     var name = nameEl ? nameEl.value || 'OpenClaw' : 'OpenClaw';
@@ -296,7 +303,14 @@
           width: 256,
           margin: 2,
           color: { dark: '#000000', light: '#ffffff' }
+        }, function(err) {
+          if (err) {
+            console.error('QR code generation error:', err);
+            canvas.style.display = 'none';
+          }
         });
+      } else {
+        console.error('QRCode library not loaded or canvas not found');
       }
 
       var urlInput = document.getElementById('convos-invite-url');
@@ -308,10 +322,33 @@
       convosStatusEl.style.background = '#e6ffe6';
 
       convosSetupBtn.textContent = 'Regenerate Invite';
+
+      // Poll for join status
+      var joinStatusText = document.getElementById('convos-join-status-text');
+      var pollInterval = setInterval(function() {
+        httpJson('/setup/api/convos/join-status').then(function(state) {
+          if (state.joined) {
+            clearInterval(pollInterval);
+            convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Joined! User connected successfully.';
+            convosStatusEl.style.background = '#e6ffe6';
+            if (joinStatusText) {
+              joinStatusText.innerHTML = '<strong style="color: green;">Connected!</strong> You can now message through Convos.';
+            }
+          }
+        }).catch(function() {
+          // Ignore polling errors
+        });
+      }, 3000);
+
+      // Stop polling after 5 minutes
+      setTimeout(function() {
+        clearInterval(pollInterval);
+      }, 300000);
     }).catch(function (err) {
       convosStatusEl.innerHTML = '<span style="color: red;">&#x2717;</span> Error: ' + err.message;
       convosStatusEl.style.background = '#ffe6e6';
       convosSetupBtn.textContent = 'Generate Invite Link';
+      convosSetupInProgress = false; // Allow status check on error
     }).finally(function () {
       convosSetupBtn.disabled = false;
     });

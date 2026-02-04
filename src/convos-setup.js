@@ -1,6 +1,7 @@
 /**
  * Convos setup script for Railway template
  * Creates a conversation and returns invite URL for QR code display
+ * Keeps agent running to handle join requests
  */
 
 import { Agent, createUser, createSigner } from "@xmtp/agent-sdk";
@@ -9,14 +10,50 @@ import { execSync } from "child_process";
 
 // Note: invite.url from SDK is already fully formed, no need for base URL
 
+// Module-level state for persistent agent
+let activeAgent = null;
+let activeConvos = null;
+let joinState = { joined: false, joinerInboxId: null, error: null };
+
+/**
+ * Get the current join state
+ * @returns {{joined: boolean, joinerInboxId: string|null, error: string|null}}
+ */
+export function getJoinState() {
+  return { ...joinState };
+}
+
+/**
+ * Stop the active Convos agent (cleanup after join or timeout)
+ */
+export async function stopConvosAgent() {
+  if (activeAgent) {
+    try {
+      await activeAgent.stop();
+      console.log("[convos-setup] Agent stopped");
+    } catch (err) {
+      console.error("[convos-setup] Error stopping agent:", err.message);
+    }
+    activeAgent = null;
+    activeConvos = null;
+  }
+}
+
 /**
  * Setup Convos channel - creates conversation and returns invite URL
+ * Keeps agent running to accept join requests
  * @param {object} options
  * @param {string} [options.env] - XMTP environment (production/dev)
  * @param {string} [options.name] - Optional conversation name
  * @returns {Promise<{inviteUrl: string, conversationId: string, privateKey: string}>}
  */
 export async function setupConvos(options = {}) {
+  // Stop any existing agent first
+  await stopConvosAgent();
+
+  // Reset join state
+  joinState = { joined: false, joinerInboxId: null, error: null };
+
   const env = options.env || "production";
   const conversationName = options.name || "OpenClaw";
 
@@ -32,6 +69,19 @@ export async function setupConvos(options = {}) {
   // Create Convos middleware
   const convos = ConvosMiddleware.create(agent, { privateKey: user.key });
   agent.use(convos.middleware());
+
+  // Set up invite handler to auto-accept join requests
+  convos.on("invite", async (ctx) => {
+    console.log(`[convos-setup] Join request from ${ctx.joinerInboxId}`);
+    try {
+      await ctx.accept();
+      joinState = { joined: true, joinerInboxId: ctx.joinerInboxId, error: null };
+      console.log(`[convos-setup] Accepted join from ${ctx.joinerInboxId}`);
+    } catch (err) {
+      joinState.error = err.message;
+      console.error(`[convos-setup] Failed to accept join:`, err);
+    }
+  });
 
   console.log("[convos-setup] Creating conversation...");
 
@@ -50,8 +100,10 @@ export async function setupConvos(options = {}) {
 
   console.log(`[convos-setup] Invite URL: ${inviteUrl}`);
 
-  // Stop the agent
-  await agent.stop();
+  // Keep agent running to handle join requests
+  activeAgent = agent;
+  activeConvos = convos;
+  console.log("[convos-setup] Agent kept running to accept join requests");
 
   // Save config via openclaw CLI
   const configJson = JSON.stringify({

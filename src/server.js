@@ -8,7 +8,7 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
-import { setupConvos } from "./convos-setup.js";
+import { setupConvos, getJoinState, stopConvosAgent } from "./convos-setup.js";
 
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
@@ -388,8 +388,8 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
             Copy Invite URL
           </button>
         </div>
-        <p style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
-          After scanning, accept the join request in the Convos app to complete setup.
+        <p id="convos-join-status-text" style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
+          Scan with the Convos iOS app. Your join request will be accepted automatically.
         </p>
       </div>
     </div>
@@ -519,6 +519,18 @@ app.get("/setup/api/convos/status", requireSetupAuth, async (req, res) => {
   }
 });
 
+// Convos join status endpoint - check if user has joined via invite
+app.get("/setup/api/convos/join-status", requireSetupAuth, async (req, res) => {
+  const state = getJoinState();
+
+  // If joined, stop the setup agent (cleanup)
+  if (state.joined) {
+    await stopConvosAgent();
+  }
+
+  res.json(state);
+});
+
 function buildOnboardArgs(payload) {
   const args = [
     "onboard",
@@ -622,8 +634,9 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
   // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
   if (ok) {
-    // Ensure gateway token is written into config so the browser UI can authenticate reliably.
-    // (We also enforce loopback bind since the wrapper proxies externally.)
+    // Ensure gateway config is set so it can start properly.
+    // (We enforce loopback bind since the wrapper proxies externally.)
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.mode", "local"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
