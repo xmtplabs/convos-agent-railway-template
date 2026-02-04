@@ -214,11 +214,11 @@
   var pairingBtn = document.getElementById('pairingApprove');
   if (pairingBtn) {
     pairingBtn.onclick = function () {
-      var channel = prompt('Enter channel (telegram or discord):');
+      var channel = prompt('Enter channel (telegram, discord, or convos):');
       if (!channel) return;
       channel = channel.trim().toLowerCase();
-      if (channel !== 'telegram' && channel !== 'discord') {
-        alert('Channel must be "telegram" or "discord"');
+      if (channel !== 'telegram' && channel !== 'discord' && channel !== 'convos') {
+        alert('Channel must be "telegram", "discord", or "convos"');
         return;
       }
       var code = prompt('Enter pairing code (e.g. 3EY4PUYS):');
@@ -329,10 +329,10 @@
         httpJson('/setup/api/convos/join-status').then(function(state) {
           if (state.joined) {
             clearInterval(pollInterval);
-            convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Joined! User connected successfully.';
+            convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Joined! Now complete pairing below.';
             convosStatusEl.style.background = '#e6ffe6';
             if (joinStatusText) {
-              joinStatusText.innerHTML = '<strong style="color: green;">Connected!</strong> You can now message through Convos.';
+              joinStatusText.innerHTML = '<strong style="color: green;">Connected!</strong> Use Approve Pairing with channel "convos" to complete setup.';
             }
           }
         }).catch(function() {

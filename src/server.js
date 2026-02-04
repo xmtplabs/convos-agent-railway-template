@@ -390,6 +390,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
         </div>
         <p id="convos-join-status-text" style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
           Scan with the Convos iOS app. Your join request will be accepted automatically.
+          After joining, use the Approve Pairing button below with channel "convos" to complete setup.
         </p>
       </div>
     </div>
@@ -401,7 +402,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
     <button id="reset" style="background:#444; margin-left:0.5rem">Reset setup</button>
     <pre id="log" style="white-space:pre-wrap"></pre>
-    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
+    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing (supports telegram, discord, convos).</p>
   </div>
 
   <script src="/setup/app.js"></script>
