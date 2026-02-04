@@ -244,5 +244,91 @@
       .catch(function (e) { logEl.textContent += 'Error: ' + String(e) + '\n'; });
   };
 
+  // Convos setup
+  var convosStatusEl = document.getElementById('convos-status');
+  var convosSetupBtn = document.getElementById('convos-setup-btn');
+  var convosCopyBtn = document.getElementById('convos-copy-btn');
+  var convosResultEl = document.getElementById('convos-result');
+
+  function checkConvosStatus() {
+    if (!convosStatusEl) return;
+    convosStatusEl.textContent = 'Checking status...';
+    convosStatusEl.style.background = '#f5f5f5';
+
+    httpJson('/setup/api/convos/status').then(function (data) {
+      if (data.configured) {
+        var shortId = data.ownerConversationId ? data.ownerConversationId.slice(0, 12) + '...' : '';
+        convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Convos configured (conversation: ' + shortId + ')';
+        convosStatusEl.style.background = '#e6ffe6';
+      } else {
+        convosStatusEl.innerHTML = '<span style="color: orange;">&#x25CB;</span> Not configured';
+      }
+    }).catch(function (err) {
+      convosStatusEl.innerHTML = '<span style="color: red;">&#x2717;</span> Error checking status';
+    });
+  }
+
+  function setupConvosChannel() {
+    if (!convosSetupBtn || !convosStatusEl) return;
+    var nameEl = document.getElementById('convos-name');
+    var envEl = document.getElementById('convos-env');
+    var name = nameEl ? nameEl.value || 'OpenClaw' : 'OpenClaw';
+    var env = envEl ? envEl.value : 'production';
+
+    convosSetupBtn.disabled = true;
+    convosSetupBtn.textContent = 'Setting up...';
+    convosStatusEl.innerHTML = '<span style="color: blue;">&#x23F3;</span> Creating XMTP identity and conversation...';
+    convosStatusEl.style.background = '#e6f3ff';
+
+    httpJson('/setup/api/convos/setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ env: env, name: name })
+    }).then(function (data) {
+      if (!data.success) {
+        throw new Error(data.error || 'Setup failed');
+      }
+
+      // Show QR code
+      var canvas = document.getElementById('convos-qr');
+      if (canvas && typeof QRCode !== 'undefined') {
+        QRCode.toCanvas(canvas, data.inviteUrl, {
+          width: 256,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+      }
+
+      var urlInput = document.getElementById('convos-invite-url');
+      if (urlInput) urlInput.value = data.inviteUrl;
+      if (convosResultEl) convosResultEl.style.display = 'block';
+
+      var shortId = data.conversationId ? data.conversationId.slice(0, 12) + '...' : '';
+      convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Invite generated! Conversation ID: ' + shortId;
+      convosStatusEl.style.background = '#e6ffe6';
+
+      convosSetupBtn.textContent = 'Regenerate Invite';
+    }).catch(function (err) {
+      convosStatusEl.innerHTML = '<span style="color: red;">&#x2717;</span> Error: ' + err.message;
+      convosStatusEl.style.background = '#ffe6e6';
+      convosSetupBtn.textContent = 'Generate Invite Link';
+    }).finally(function () {
+      convosSetupBtn.disabled = false;
+    });
+  }
+
+  function copyConvosInvite() {
+    var input = document.getElementById('convos-invite-url');
+    if (input) {
+      input.select();
+      document.execCommand('copy');
+      alert('Invite URL copied!');
+    }
+  }
+
+  if (convosSetupBtn) convosSetupBtn.onclick = setupConvosChannel;
+  if (convosCopyBtn) convosCopyBtn.onclick = copyConvosInvite;
+
   refreshStatus();
+  checkConvosStatus();
 })();
