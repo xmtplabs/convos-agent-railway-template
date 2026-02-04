@@ -8,7 +8,7 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
-import { setupConvos, getJoinState, stopConvosAgent } from "./convos-setup.js";
+import { setupConvos, getJoinState, stopConvosAgent, sendMessage } from "./convos-setup.js";
 
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
@@ -311,8 +311,52 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   </div>
 
   <div class="card">
-    <h2>1) Model/auth provider</h2>
-    <p class="muted">Matches the groups shown in the terminal onboarding.</p>
+    <h2>1) Connect via Convos</h2>
+    <p class="muted">
+      Convos provides end-to-end encrypted messaging via XMTP.
+      Scan the QR code with the Convos iOS app to join the conversation.
+    </p>
+
+    <div id="convos-status" style="margin-bottom: 1rem; padding: 0.5rem; background: #f5f5f5; border-radius: 4px;">
+      Generating invite...
+    </div>
+
+    <div id="convos-setup-section" style="display: none;">
+      <label for="convos-name">Conversation Name (optional)</label>
+      <input type="text" id="convos-name" placeholder="OpenClaw" style="margin-bottom: 0.5rem;" />
+
+      <label for="convos-env">Environment</label>
+      <select id="convos-env" style="margin-bottom: 1rem;">
+        <option value="production">Production</option>
+        <option value="dev">Development</option>
+      </select>
+
+      <button id="convos-setup-btn" type="button" style="background:#0f172a">
+        Regenerate Invite
+      </button>
+    </div>
+
+    <div id="convos-result" style="margin-top: 1rem;">
+      <div style="text-align: center; padding: 1rem; background: #fff; border: 1px solid #ddd; border-radius: 8px;">
+        <p style="font-weight: bold; margin-bottom: 1rem;">Scan with Convos iOS App</p>
+        <canvas id="convos-qr" width="256" height="256" style="margin: 0 auto; display: block;"></canvas>
+        <div id="convos-loading" style="padding: 2rem; color: #666;">Loading QR code...</div>
+        <div id="convos-invite-section" style="display: none; margin-top: 1rem;">
+          <input type="text" id="convos-invite-url" readonly style="width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85rem;" />
+          <button type="button" id="convos-copy-btn" style="margin-top: 0.5rem;">
+            Copy Invite URL
+          </button>
+        </div>
+        <p id="convos-join-status-text" style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
+          Scan the QR code with the Convos iOS app. Your join request will be accepted automatically.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2) Model/Auth Configuration</h2>
+    <p class="muted">Configure which AI provider to use.</p>
     <label>Provider group</label>
     <select id="authGroup"></select>
 
@@ -330,79 +374,52 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     </select>
   </div>
 
-  <div class="card">
-    <h2>2) Optional: Channels</h2>
-    <p class="muted">You can also add channels later inside OpenClaw, but this helps you get messaging working immediately.</p>
-
-    <label>Telegram bot token (optional)</label>
-    <input id="telegramToken" type="password" placeholder="123456:ABC..." />
-    <div class="muted" style="margin-top: 0.25rem">
-      Get it from BotFather: open Telegram, message <code>@BotFather</code>, run <code>/newbot</code>, then copy the token.
-    </div>
-
-    <label>Discord bot token (optional)</label>
-    <input id="discordToken" type="password" placeholder="Bot token" />
-    <div class="muted" style="margin-top: 0.25rem">
-      Get it from the Discord Developer Portal: create an application, add a Bot, then copy the Bot Token.<br/>
-      <strong>Important:</strong> Enable <strong>MESSAGE CONTENT INTENT</strong> in Bot → Privileged Gateway Intents, or the bot will crash on startup.
-    </div>
-
-    <label>Slack bot token (optional)</label>
-    <input id="slackBotToken" type="password" placeholder="xoxb-..." />
-
-    <label>Slack app token (optional)</label>
-    <input id="slackAppToken" type="password" placeholder="xapp-..." />
-
-    <h3 style="margin-top: 1.5rem;">Convos (E2E Encrypted XMTP)</h3>
-    <p class="muted">
-      Convos provides end-to-end encrypted messaging via XMTP. OpenClaw will create
-      a conversation and generate an invite link for you to scan with the Convos iOS app.
+  <div class="card" id="complete-setup-card">
+    <h2>3) Complete Setup</h2>
+    <p id="complete-setup-status" class="muted">
+      After scanning the QR code and joining the conversation, click below to complete setup.
+      The pairing code will be sent to your Convos chat automatically.
     </p>
 
-    <div id="convos-status" style="margin-bottom: 1rem; padding: 0.5rem; background: #f5f5f5; border-radius: 4px;">
-      Checking status...
-    </div>
+    <button id="completeSetup" disabled style="background:#16a34a; opacity: 0.5;">
+      Complete Setup & Send Pairing Code
+    </button>
 
-    <div id="convos-setup-section">
-      <label for="convos-name">Conversation Name (optional)</label>
-      <input type="text" id="convos-name" placeholder="OpenClaw" style="margin-bottom: 0.5rem;" />
-
-      <label for="convos-env">Environment</label>
-      <select id="convos-env" style="margin-bottom: 1rem;">
-        <option value="production">Production</option>
-        <option value="dev">Development</option>
-      </select>
-
-      <button id="convos-setup-btn" type="button" style="background:#0f172a">
-        Generate Invite Link
-      </button>
-    </div>
-
-    <div id="convos-result" style="display: none; margin-top: 1rem;">
-      <div style="text-align: center; padding: 1rem; background: #fff; border: 1px solid #ddd; border-radius: 8px;">
-        <p style="font-weight: bold; margin-bottom: 1rem;">Scan with Convos iOS App</p>
-        <canvas id="convos-qr" style="margin: 0 auto;"></canvas>
-        <div style="margin-top: 1rem;">
-          <input type="text" id="convos-invite-url" readonly style="width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85rem;" />
-          <button type="button" id="convos-copy-btn" style="margin-top: 0.5rem;">
-            Copy Invite URL
-          </button>
-        </div>
-        <p id="convos-join-status-text" style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
-          Scan with the Convos iOS app. Your join request will be accepted automatically.
-          After joining, use the Approve Pairing button below with channel "convos" to complete setup.
-        </p>
-      </div>
-    </div>
+    <pre id="log" style="white-space:pre-wrap; margin-top: 1rem;"></pre>
   </div>
 
   <div class="card">
-    <h2>3) Run onboarding</h2>
-    <button id="run">Run setup</button>
-    <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
+    <h2>Advanced Options</h2>
+    <button id="pairingApprove" style="background:#1f2937">Approve pairing manually</button>
+    <button id="run" style="background:#374151; margin-left:0.5rem">Run onboarding only</button>
     <button id="reset" style="background:#444; margin-left:0.5rem">Reset setup</button>
-    <pre id="log" style="white-space:pre-wrap"></pre>
-    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing (supports telegram, discord, convos).</p>
+    <p class="muted" style="margin-top: 0.5rem">
+      Use these if you need to manually approve pairing, run onboarding separately, or reset the config.
+    </p>
+
+    <details style="margin-top: 1rem;">
+      <summary class="muted" style="cursor: pointer;">Other channels (Telegram, Discord, Slack)</summary>
+      <div style="margin-top: 0.75rem;">
+        <label>Telegram bot token (optional)</label>
+        <input id="telegramToken" type="password" placeholder="123456:ABC..." />
+        <div class="muted" style="margin-top: 0.25rem">
+          Get it from BotFather: open Telegram, message <code>@BotFather</code>, run <code>/newbot</code>, then copy the token.
+        </div>
+
+        <label>Discord bot token (optional)</label>
+        <input id="discordToken" type="password" placeholder="Bot token" />
+        <div class="muted" style="margin-top: 0.25rem">
+          Get it from the Discord Developer Portal: create an application, add a Bot, then copy the Bot Token.<br/>
+          <strong>Important:</strong> Enable <strong>MESSAGE CONTENT INTENT</strong> in Bot → Privileged Gateway Intents.
+        </div>
+
+        <label>Slack bot token (optional)</label>
+        <input id="slackBotToken" type="password" placeholder="xoxb-..." />
+
+        <label>Slack app token (optional)</label>
+        <input id="slackAppToken" type="password" placeholder="xapp-..." />
+      </div>
+    </details>
   </div>
 
   <script src="/setup/app.js"></script>
@@ -524,12 +541,104 @@ app.get("/setup/api/convos/status", requireSetupAuth, async (req, res) => {
 app.get("/setup/api/convos/join-status", requireSetupAuth, async (req, res) => {
   const state = getJoinState();
 
-  // If joined, stop the setup agent (cleanup)
-  if (state.joined) {
-    await stopConvosAgent();
-  }
-
+  // Don't stop the agent yet - we need it to send the pairing code
   res.json(state);
+});
+
+// Convos complete-setup endpoint - runs onboarding and sends pairing code
+app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) => {
+  try {
+    const payload = req.body || {};
+
+    // Check if user has joined
+    const joinState = getJoinState();
+    if (!joinState.joined) {
+      return res.status(400).json({
+        ok: false,
+        error: "User has not joined the conversation yet. Scan the QR code first."
+      });
+    }
+
+    // Check if already configured
+    if (isConfigured()) {
+      return res.json({
+        ok: true,
+        output: "Already configured. Use Reset setup if you want to rerun onboarding.\n"
+      });
+    }
+
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+    // Run onboarding
+    const onboardArgs = buildOnboardArgs(payload);
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+
+    if (onboard.code !== 0 || !isConfigured()) {
+      return res.status(500).json({
+        ok: false,
+        output: onboard.output,
+        error: "Onboarding failed"
+      });
+    }
+
+    // Set gateway config
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.mode", "local"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+
+    // Start gateway
+    await restartGateway();
+
+    // Generate pairing code for convos channel
+    const pairResult = await runCmd(OPENCLAW_NODE,
+      clawArgs(["gateway", "pair", "--channel", "convos"]));
+
+    // Parse pairing code from output (format like "3EY4PUYS" or similar 8-char code)
+    const codeMatch = pairResult.output.match(/([A-Z0-9]{8})/);
+    const pairingCode = codeMatch ? codeMatch[1] : null;
+
+    if (!pairingCode) {
+      return res.json({
+        ok: true,
+        output: onboard.output + "\n\nSetup complete but could not generate pairing code.\n" +
+                "Use 'Approve pairing' button manually.\n",
+        pairingCode: null
+      });
+    }
+
+    // Send pairing code to the Convos conversation
+    try {
+      await sendMessage(
+        `🔐 Your pairing code: ${pairingCode}\n\n` +
+        `Send this code back in this chat to complete setup and authenticate.`
+      );
+    } catch (msgErr) {
+      console.error("[convos] Failed to send pairing code:", msgErr);
+      return res.json({
+        ok: true,
+        output: onboard.output + `\n\nPairing code: ${pairingCode}\n` +
+                "(Could not auto-send to conversation - send manually)\n",
+        pairingCode
+      });
+    }
+
+    // Stop the setup agent now that we've sent the code
+    await stopConvosAgent();
+
+    res.json({
+      ok: true,
+      output: onboard.output + "\n\n✅ Pairing code sent to your Convos conversation!\n" +
+              "Check the chat and send the code back to authenticate.\n",
+      pairingCode
+    });
+
+  } catch (err) {
+    console.error("[/setup/api/convos/complete-setup] error:", err);
+    return res.status(500).json({ ok: false, error: String(err) });
+  }
 });
 
 function buildOnboardArgs(payload) {

@@ -13,6 +13,7 @@ import { execSync } from "child_process";
 // Module-level state for persistent agent
 let activeAgent = null;
 let activeConvos = null;
+let activeGroup = null;
 let joinState = { joined: false, joinerInboxId: null, error: null };
 
 /**
@@ -21,6 +22,26 @@ let joinState = { joined: false, joinerInboxId: null, error: null };
  */
 export function getJoinState() {
   return { ...joinState };
+}
+
+/**
+ * Get the active group (if setup is in progress)
+ * @returns {object|null}
+ */
+export function getActiveGroup() {
+  return activeGroup;
+}
+
+/**
+ * Send a message to the active Convos conversation
+ * @param {string} message - The message to send
+ */
+export async function sendMessage(message) {
+  if (!activeGroup) {
+    throw new Error("No active group - setup not complete");
+  }
+  await activeGroup.send(message);
+  console.log("[convos-setup] Message sent to conversation");
 }
 
 /**
@@ -36,6 +57,7 @@ export async function stopConvosAgent() {
     }
     activeAgent = null;
     activeConvos = null;
+    activeGroup = null;
   }
 }
 
@@ -103,6 +125,7 @@ export async function setupConvos(options = {}) {
   // Keep agent running to handle join requests
   activeAgent = agent;
   activeConvos = convos;
+  activeGroup = group;
   console.log("[convos-setup] Agent kept running to accept join requests");
 
   // Save config via openclaw CLI

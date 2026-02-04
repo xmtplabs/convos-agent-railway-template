@@ -250,6 +250,11 @@
   var convosCopyBtn = document.getElementById('convos-copy-btn');
   var convosResultEl = document.getElementById('convos-result');
   var convosSetupInProgress = false;
+  var convosJoined = false;
+
+  // Complete setup elements
+  var completeSetupBtn = document.getElementById('completeSetup');
+  var completeSetupStatusEl = document.getElementById('complete-setup-status');
 
   function checkConvosStatus() {
     if (!convosStatusEl) return;
@@ -275,17 +280,23 @@
   }
 
   function setupConvosChannel() {
-    if (!convosSetupBtn || !convosStatusEl) return;
+    if (!convosStatusEl) return;
     convosSetupInProgress = true;
     var nameEl = document.getElementById('convos-name');
     var envEl = document.getElementById('convos-env');
     var name = nameEl ? nameEl.value || 'OpenClaw' : 'OpenClaw';
     var env = envEl ? envEl.value : 'production';
 
-    convosSetupBtn.disabled = true;
-    convosSetupBtn.textContent = 'Setting up...';
+    if (convosSetupBtn) {
+      convosSetupBtn.disabled = true;
+      convosSetupBtn.textContent = 'Setting up...';
+    }
     convosStatusEl.innerHTML = '<span style="color: blue;">&#x23F3;</span> Creating XMTP identity and conversation...';
     convosStatusEl.style.background = '#e6f3ff';
+
+    // Show loading indicator
+    var loadingEl = document.getElementById('convos-loading');
+    if (loadingEl) loadingEl.style.display = 'block';
 
     httpJson('/setup/api/convos/setup', {
       method: 'POST',
@@ -295,6 +306,12 @@
       if (!data.success) {
         throw new Error(data.error || 'Setup failed');
       }
+
+      // Hide loading, show invite section
+      var loadingEl = document.getElementById('convos-loading');
+      if (loadingEl) loadingEl.style.display = 'none';
+      var inviteSection = document.getElementById('convos-invite-section');
+      if (inviteSection) inviteSection.style.display = 'block';
 
       // Show QR code
       var canvas = document.getElementById('convos-qr');
@@ -317,22 +334,35 @@
       if (urlInput) urlInput.value = data.inviteUrl;
       if (convosResultEl) convosResultEl.style.display = 'block';
 
+      // Show the setup section for regenerating
+      var setupSection = document.getElementById('convos-setup-section');
+      if (setupSection) setupSection.style.display = 'block';
+
       var shortId = data.conversationId ? data.conversationId.slice(0, 12) + '...' : '';
-      convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Invite generated! Conversation ID: ' + shortId;
+      convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Invite generated! Scan the QR code below.';
       convosStatusEl.style.background = '#e6ffe6';
 
-      convosSetupBtn.textContent = 'Regenerate Invite';
+      if (convosSetupBtn) convosSetupBtn.textContent = 'Regenerate Invite';
 
       // Poll for join status
       var joinStatusText = document.getElementById('convos-join-status-text');
       var pollInterval = setInterval(function() {
         httpJson('/setup/api/convos/join-status').then(function(state) {
-          if (state.joined) {
+          if (state.joined && !convosJoined) {
+            convosJoined = true;
             clearInterval(pollInterval);
-            convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Joined! Now complete pairing below.';
+            convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Joined! Complete setup below.';
             convosStatusEl.style.background = '#e6ffe6';
             if (joinStatusText) {
-              joinStatusText.innerHTML = '<strong style="color: green;">Connected!</strong> Use Approve Pairing with channel "convos" to complete setup.';
+              joinStatusText.innerHTML = '<strong style="color: green;">Connected!</strong> Click "Complete Setup" below to finish.';
+            }
+            // Enable the complete setup button
+            if (completeSetupBtn) {
+              completeSetupBtn.disabled = false;
+              completeSetupBtn.style.opacity = '1';
+            }
+            if (completeSetupStatusEl) {
+              completeSetupStatusEl.innerHTML = '<strong style="color: green;">Ready!</strong> Click the button to run setup and receive your pairing code in Convos.';
             }
           }
         }).catch(function() {
@@ -347,10 +377,16 @@
     }).catch(function (err) {
       convosStatusEl.innerHTML = '<span style="color: red;">&#x2717;</span> Error: ' + err.message;
       convosStatusEl.style.background = '#ffe6e6';
-      convosSetupBtn.textContent = 'Generate Invite Link';
+      if (convosSetupBtn) convosSetupBtn.textContent = 'Regenerate Invite';
       convosSetupInProgress = false; // Allow status check on error
+      // Hide loading on error
+      var loadingEl = document.getElementById('convos-loading');
+      if (loadingEl) loadingEl.style.display = 'none';
+      // Show setup section to retry
+      var setupSection = document.getElementById('convos-setup-section');
+      if (setupSection) setupSection.style.display = 'block';
     }).finally(function () {
-      convosSetupBtn.disabled = false;
+      if (convosSetupBtn) convosSetupBtn.disabled = false;
     });
   }
 
@@ -366,6 +402,75 @@
   if (convosSetupBtn) convosSetupBtn.onclick = setupConvosChannel;
   if (convosCopyBtn) convosCopyBtn.onclick = copyConvosInvite;
 
+  // Complete setup button handler
+  function runCompleteSetup() {
+    if (!completeSetupBtn) return;
+    if (!convosJoined) {
+      alert('Please scan the QR code and join the conversation first.');
+      return;
+    }
+
+    var payload = {
+      flow: document.getElementById('flow').value,
+      authChoice: authChoiceEl.value,
+      authSecret: document.getElementById('authSecret').value,
+      telegramToken: document.getElementById('telegramToken').value,
+      discordToken: document.getElementById('discordToken').value,
+      slackBotToken: document.getElementById('slackBotToken').value,
+      slackAppToken: document.getElementById('slackAppToken').value
+    };
+
+    completeSetupBtn.disabled = true;
+    completeSetupBtn.textContent = 'Setting up...';
+    logEl.textContent = 'Running setup...\n';
+
+    httpJson('/setup/api/convos/complete-setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(data) {
+      logEl.textContent += (data.output || JSON.stringify(data, null, 2));
+      if (data.ok) {
+        completeSetupBtn.textContent = 'Setup Complete!';
+        completeSetupBtn.style.background = '#16a34a';
+        if (completeSetupStatusEl) {
+          completeSetupStatusEl.innerHTML = '<strong style="color: green;">Done!</strong> Check your Convos chat for the pairing code and send it back to authenticate.';
+        }
+      } else {
+        completeSetupBtn.disabled = false;
+        completeSetupBtn.textContent = 'Complete Setup & Send Pairing Code';
+      }
+      return refreshStatus();
+    }).catch(function(err) {
+      logEl.textContent += '\nError: ' + String(err) + '\n';
+      completeSetupBtn.disabled = false;
+      completeSetupBtn.textContent = 'Complete Setup & Send Pairing Code';
+    });
+  }
+
+  if (completeSetupBtn) completeSetupBtn.onclick = runCompleteSetup;
+
   refreshStatus();
-  checkConvosStatus();
+
+  // Auto-generate Convos invite on page load
+  httpJson('/setup/api/convos/status').then(function(data) {
+    if (!data.configured) {
+      // Auto-generate invite
+      setupConvosChannel();
+    } else {
+      // Already configured
+      convosStatusEl.innerHTML = '<span style="color: green;">&#x2713;</span> Convos already configured';
+      convosStatusEl.style.background = '#e6ffe6';
+      var loadingEl = document.getElementById('convos-loading');
+      if (loadingEl) loadingEl.style.display = 'none';
+      var setupSection = document.getElementById('convos-setup-section');
+      if (setupSection) setupSection.style.display = 'block';
+      // Show invite section option to regenerate
+      var inviteSection = document.getElementById('convos-invite-section');
+      if (inviteSection) inviteSection.style.display = 'none';
+    }
+  }).catch(function() {
+    // On error, try to generate invite anyway
+    setupConvosChannel();
+  });
 })();
