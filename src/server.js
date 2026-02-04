@@ -1,4 +1,4 @@
-import childProcess from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,6 +7,8 @@ import path from "node:path";
 import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
+
+import { setupConvos } from "./convos-setup.js";
 
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
@@ -242,6 +244,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw Setup</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 2rem; max-width: 900px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; }
@@ -349,6 +352,47 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 
     <label>Slack app token (optional)</label>
     <input id="slackAppToken" type="password" placeholder="xapp-..." />
+
+    <h3 style="margin-top: 1.5rem;">Convos (E2E Encrypted XMTP)</h3>
+    <p class="muted">
+      Convos provides end-to-end encrypted messaging via XMTP. OpenClaw will create
+      a conversation and generate an invite link for you to scan with the Convos iOS app.
+    </p>
+
+    <div id="convos-status" style="margin-bottom: 1rem; padding: 0.5rem; background: #f5f5f5; border-radius: 4px;">
+      Checking status...
+    </div>
+
+    <div id="convos-setup-section">
+      <label for="convos-name">Conversation Name (optional)</label>
+      <input type="text" id="convos-name" placeholder="OpenClaw" style="margin-bottom: 0.5rem;" />
+
+      <label for="convos-env">Environment</label>
+      <select id="convos-env" style="margin-bottom: 1rem;">
+        <option value="production">Production</option>
+        <option value="dev">Development</option>
+      </select>
+
+      <button id="convos-setup-btn" type="button" style="background:#0f172a">
+        Generate Invite Link
+      </button>
+    </div>
+
+    <div id="convos-result" style="display: none; margin-top: 1rem;">
+      <div style="text-align: center; padding: 1rem; background: #fff; border: 1px solid #ddd; border-radius: 8px;">
+        <p style="font-weight: bold; margin-bottom: 1rem;">Scan with Convos iOS App</p>
+        <canvas id="convos-qr" style="margin: 0 auto;"></canvas>
+        <div style="margin-top: 1rem;">
+          <input type="text" id="convos-invite-url" readonly style="width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85rem;" />
+          <button type="button" id="convos-copy-btn" style="margin-top: 0.5rem;">
+            Copy Invite URL
+          </button>
+        </div>
+        <p style="margin-top: 1rem; font-size: 0.85rem; color: #666;">
+          After scanning, accept the join request in the Convos app to complete setup.
+        </p>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -426,6 +470,53 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
     channelsAddHelp: channelsHelp.output,
     authGroups,
   });
+});
+
+// Convos setup endpoint - creates conversation and returns invite URL
+app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
+  try {
+    const { env = "production", name = "OpenClaw" } = req.body || {};
+
+    console.log(`[convos] Setting up Convos (env: ${env}, name: ${name})...`);
+
+    const result = await setupConvos({ env, name });
+
+    res.json({
+      success: true,
+      inviteUrl: result.inviteUrl,
+      inviteSlug: result.inviteSlug,
+      conversationId: result.conversationId,
+    });
+  } catch (err) {
+    console.error("[convos] Setup failed:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+// Convos status endpoint - check if already configured
+app.get("/setup/api/convos/status", requireSetupAuth, async (req, res) => {
+  try {
+    const result = spawnSync("openclaw", ["config", "get", "channels.convos"], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+
+    if (result.status !== 0) {
+      return res.json({ configured: false });
+    }
+
+    const config = JSON.parse(result.stdout.trim() || "{}");
+    res.json({
+      configured: Boolean(config.privateKey && config.ownerConversationId),
+      ownerConversationId: config.ownerConversationId,
+      env: config.env || "production",
+    });
+  } catch (err) {
+    res.json({ configured: false, error: err.message });
+  }
 });
 
 function buildOnboardArgs(payload) {

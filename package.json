@@ -12,6 +12,8 @@
     "smoke": "node scripts/smoke.js"
   },
   "dependencies": {
+    "@xmtp/agent-sdk": "^2.0.1",
+    "convos-node-sdk": "github:xmtplabs/convos-node-sdk",
     "express": "^5.1.0",
     "http-proxy": "^1.18.1",
     "tar": "^7.5.4"
