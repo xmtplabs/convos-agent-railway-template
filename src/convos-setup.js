@@ -66,6 +66,12 @@ export async function setupConvos(options = {}) {
       stdio: "inherit",
     });
     console.log("[convos-setup] Config saved successfully");
+
+    // Run doctor --fix to fully enable the channel
+    execSync(`openclaw doctor --fix`, {
+      stdio: "inherit",
+    });
+    console.log("[convos-setup] Doctor --fix completed");
   } catch (err) {
     console.error("[convos-setup] Failed to save config:", err.message);
     throw err;
