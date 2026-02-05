@@ -133,12 +133,14 @@ export async function setupConvos(options = {}) {
   console.log("[convos-setup] Agent kept running to accept join requests");
 
   // Save config via openclaw CLI
+  // Use dmPolicy: "open" with allowFrom: ["*"] since access is controlled by the invite link
   const configJson = JSON.stringify({
     enabled: true,
     privateKey: user.key,
     env,
     ownerConversationId: group.id,
-    dmPolicy: "pairing",  // Required for gateway pair command to work
+    dmPolicy: "open",
+    allowFrom: ["*"],
   });
 
   try {

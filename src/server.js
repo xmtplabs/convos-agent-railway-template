@@ -992,51 +992,21 @@ app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) 
     // Start gateway
     await restartGateway();
 
-    // Generate pairing code for convos channel
-    console.log("[complete-setup] Running gateway pair convos...");
-    const pairResult = await runCmd(OPENCLAW_NODE,
-      clawArgs(["gateway", "pair", "convos"]));
-    console.log("[complete-setup] gateway pair result:", {
-      code: pairResult.code,
-      output: pairResult.output
-    });
-
-    // Parse pairing code from output (format like "3EY4PUYS" or similar 8-char code)
-    const codeMatch = pairResult.output.match(/([A-Z0-9]{8})/);
-    const pairingCode = codeMatch ? codeMatch[1] : null;
-    console.log("[complete-setup] Parsed pairing code:", pairingCode);
-
-    // Send a message to the Convos conversation indicating the pairing code is displayed
-    // This helps the user understand they need to send the code IN Convos to verify
-    if (pairingCode) {
-      try {
-        await sendMessage("Pairing code displayed on setup page. Send it here to complete pairing.");
-        console.log("[complete-setup] Sent pairing instruction message to Convos");
-      } catch (msgErr) {
-        console.error("[complete-setup] Failed to send instruction message:", msgErr.message);
-        // Non-fatal - continue with setup completion
-      }
+    // Send a welcome message to the Convos conversation
+    try {
+      await sendMessage("Setup complete! OpenClaw is now ready to use.");
+      console.log("[complete-setup] Sent welcome message to Convos");
+    } catch (msgErr) {
+      console.error("[complete-setup] Failed to send welcome message:", msgErr.message);
+      // Non-fatal - setup is still complete
     }
 
     // Stop the setup agent - we're done with the invite flow
     await stopConvosAgent();
 
-    if (!pairingCode) {
-      return res.json({
-        ok: true,
-        output: onboard.output + "\n\nSetup complete but could not generate pairing code.\n" +
-                `Pair command output: ${pairResult.output}\n` +
-                "Use 'Approve pairing' button manually.\n",
-        pairingCode: null
-      });
-    }
-
-    // Return the pairing code to display in the UI
-    // User needs to send this code IN Convos to verify they're the same person
     res.json({
       ok: true,
-      output: onboard.output,
-      pairingCode
+      output: onboard.output
     });
 
   } catch (err) {
