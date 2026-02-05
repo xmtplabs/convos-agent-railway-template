@@ -1006,6 +1006,18 @@ app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) 
     const pairingCode = codeMatch ? codeMatch[1] : null;
     console.log("[complete-setup] Parsed pairing code:", pairingCode);
 
+    // Send a message to the Convos conversation indicating the pairing code is displayed
+    // This helps the user understand they need to send the code IN Convos to verify
+    if (pairingCode) {
+      try {
+        await sendMessage("Pairing code displayed on setup page. Send it here to complete pairing.");
+        console.log("[complete-setup] Sent pairing instruction message to Convos");
+      } catch (msgErr) {
+        console.error("[complete-setup] Failed to send instruction message:", msgErr.message);
+        // Non-fatal - continue with setup completion
+      }
+    }
+
     // Stop the setup agent - we're done with the invite flow
     await stopConvosAgent();
 
