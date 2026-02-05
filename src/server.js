@@ -175,7 +175,7 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
-  gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
+  const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
     env: {
       ...process.env,
@@ -186,15 +186,18 @@ async function startGateway() {
       CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
     },
   });
+  gatewayProc = proc;
 
-  gatewayProc.on("error", (err) => {
+  // Only clear gatewayProc if THIS process is still the current one.
+  // Prevents a stale exit handler from wiping a newly spawned gateway reference.
+  proc.on("error", (err) => {
     console.error(`[gateway] spawn error: ${String(err)}`);
-    gatewayProc = null;
+    if (gatewayProc === proc) gatewayProc = null;
   });
 
-  gatewayProc.on("exit", (code, signal) => {
+  proc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
-    gatewayProc = null;
+    if (gatewayProc === proc) gatewayProc = null;
   });
 }
 
@@ -987,6 +990,10 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
   try {
     const payload = req.body || {};
 
+    if (!payload.authChoice) {
+      return res.status(400).json({ success: false, error: "No auth provider selected" });
+    }
+
     fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
@@ -997,6 +1004,8 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
       await sleep(750);
       gatewayProc = null;
     }
+    // Cancel any pending startup promise so ensureGatewayRunning() starts fresh.
+    gatewayStarting = null;
 
     // Write config JSON directly — no onboarding, no config set calls, no restart cascade.
     console.log("[convos] Writing gateway config...");
