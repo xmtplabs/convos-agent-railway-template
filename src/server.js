@@ -988,8 +988,9 @@ app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) 
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
-    // Auto-approve device pairing for the Control UI
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.pairing.autoApprove", "true"]));
+    // Disable device pairing for Control UI - Railway proxy makes all connections appear non-local
+    // This is safe because access is already protected by HTTPS + SETUP_PASSWORD
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]));
 
     // Start gateway
     await restartGateway();
