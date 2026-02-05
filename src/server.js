@@ -923,7 +923,7 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
 
 // Per-auth-choice configuration: model name, env var, and optional custom provider config.
 // Model names and env vars sourced from OpenClaw docs/concepts/model-providers.md.
-// Config path: agents.defaults.model = "provider/model-id"
+// Config path: agents.defaults.model.primary = "provider/model-id"
 const AUTH_PROVIDER_CONFIG = {
   // Anthropic
   "apiKey":       { model: "anthropic/claude-opus-4-5", envVar: "ANTHROPIC_API_KEY" },
@@ -1017,9 +1017,9 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
       },
     };
 
-    // Set the agent model (agents.defaults.model = "provider/model-id").
+    // Set the agent model (agents.defaults.model.primary = "provider/model-id").
     if (providerCfg?.model) {
-      config.agents = { defaults: { model: providerCfg.model } };
+      config.agents = { defaults: { model: { primary: providerCfg.model } } };
       console.log(`[convos] Setting agent model: ${providerCfg.model}`);
     } else if (authChoice) {
       console.warn(`[convos] No default model mapped for authChoice="${authChoice}"`);
