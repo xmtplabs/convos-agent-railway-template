@@ -138,6 +138,7 @@ export async function setupConvos(options = {}) {
     privateKey: user.key,
     env,
     ownerConversationId: group.id,
+    dmPolicy: "pairing",  // Required for gateway pair command to work
   });
 
   try {
