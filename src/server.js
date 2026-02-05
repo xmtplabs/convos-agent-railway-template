@@ -964,6 +964,9 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
         auth: { mode: "token", token: OPENCLAW_GATEWAY_TOKEN },
         controlUi: { allowInsecureAuth: true },
       },
+      plugins: {
+        load: { paths: ["/openclaw/extensions"] },
+      },
     };
     fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
 
