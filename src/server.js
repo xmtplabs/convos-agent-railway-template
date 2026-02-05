@@ -70,30 +70,22 @@ const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}
 // XMTP environment (production or dev) - controlled via Railway env var
 const XMTP_ENV = process.env.XMTP_ENV || "production";
 
-// JSON-RPC helper for calling gateway RPCs (Convos setup, etc.)
-async function gatewayRpc(method, params = {}) {
-  const url = `${GATEWAY_TARGET}/rpc`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENCLAW_GATEWAY_TOKEN}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: crypto.randomUUID(),
-      method,
-      params,
-    }),
-  });
+// Helper for calling Convos HTTP endpoints on the gateway.
+// The Convos plugin exposes REST routes at /convos/setup, /convos/setup/status, /convos/setup/complete.
+async function convosHttp(path, { method = "GET", body } = {}) {
+  const url = `${GATEWAY_TARGET}${path}`;
+  const headers = { Authorization: `Bearer ${OPENCLAW_GATEWAY_TOKEN}` };
+  const opts = { method, headers };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
   if (!res.ok) {
-    throw new Error(`RPC HTTP ${res.status}: ${await res.text()}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} ${method} ${path}: ${text}`);
   }
-  const json = await res.json();
-  if (json.error) {
-    throw new Error(json.error.message || JSON.stringify(json.error));
-  }
-  return json.result;
+  return res.json();
 }
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
@@ -916,13 +908,21 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
   });
 });
 
-// Convos setup endpoint - runs onboarding, starts gateway, then calls convos.setup RPC
+// Convos setup endpoint - runs onboarding, starts gateway, then calls POST /convos/setup
 app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
   try {
     const payload = req.body || {};
 
     fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+    // Stop existing gateway before config writes to avoid cascading SIGUSR1 restarts.
+    if (gatewayProc) {
+      console.log("[convos] Stopping existing gateway before setup...");
+      try { gatewayProc.kill("SIGTERM"); } catch {}
+      await sleep(750);
+      gatewayProc = null;
+    }
 
     // Run onboarding first (creates config file with model/auth settings)
     console.log("[convos] Running onboarding...");
@@ -937,7 +937,7 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
       });
     }
 
-    // Set gateway config
+    // Batch all gateway config before starting the gateway (avoids restart cascade).
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.mode", "local"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
@@ -946,22 +946,24 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
     // Disable device pairing for Control UI - Railway proxy makes all connections appear non-local
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]));
 
-    // Start gateway
+    // Start gateway (all config is written, so only one start — no cascading restarts)
     console.log("[convos] Starting gateway...");
-    await restartGateway();
+    await ensureGatewayRunning();
 
-    // Call convos.setup RPC via the running gateway
-    console.log("[convos] Calling convos.setup RPC...");
+    // Call POST /convos/setup on the running gateway
+    console.log("[convos] Calling POST /convos/setup...");
     let result;
-    // Retry a few times in case the gateway needs a moment to fully initialize
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        result = await gatewayRpc("convos.setup", { env: XMTP_ENV, name: "OpenClaw" });
+        result = await convosHttp("/convos/setup", {
+          method: "POST",
+          body: { env: XMTP_ENV, name: "OpenClaw" },
+        });
         break;
-      } catch (rpcErr) {
-        if (attempt === 3) throw rpcErr;
-        console.log(`[convos] RPC attempt ${attempt} failed, retrying...`);
-        await sleep(1500);
+      } catch (err) {
+        if (attempt === 5) throw err;
+        console.log(`[convos] Setup attempt ${attempt} failed, retrying...`);
+        await sleep(2000);
       }
     }
 
@@ -980,25 +982,25 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
   }
 });
 
-// Convos join status endpoint - passthrough to convos.setup.status RPC
+// Convos join status endpoint - passthrough to GET /convos/setup/status
 app.get("/setup/api/convos/join-status", requireSetupAuth, async (req, res) => {
   try {
-    const result = await gatewayRpc("convos.setup.status");
+    const result = await convosHttp("/convos/setup/status");
     res.json({
       joined: result.joined,
       joinerInboxId: result.joinerInboxId || null,
       active: result.active,
     });
   } catch (err) {
-    // If gateway is not running or RPC fails, return not-joined state
+    // If gateway is not running or endpoint fails, return not-joined state
     res.json({ joined: false, joinerInboxId: null, error: err.message });
   }
 });
 
-// Convos complete-setup endpoint - calls convos.setup.complete RPC
+// Convos complete-setup endpoint - calls POST /convos/setup/complete
 app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) => {
   try {
-    const result = await gatewayRpc("convos.setup.complete");
+    const result = await convosHttp("/convos/setup/complete", { method: "POST" });
     console.log("[convos] Setup complete:", result);
 
     res.json({
@@ -1366,6 +1368,12 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
 });
 
 app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
+  // Stop gateway so it doesn't hold stale config or recreate files.
+  if (gatewayProc) {
+    try { gatewayProc.kill("SIGTERM"); } catch {}
+    await sleep(750);
+    gatewayProc = null;
+  }
   // Minimal reset: delete the config file so /setup can rerun.
   // Keep credentials/sessions/workspace by default.
   try {

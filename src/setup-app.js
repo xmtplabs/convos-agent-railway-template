@@ -270,7 +270,27 @@
       showLog('Resetting...\n');
       fetch('/setup/api/reset', { method: 'POST', credentials: 'same-origin' })
         .then(function (res) { return res.text(); })
-        .then(function (t) { appendLog(t + '\n'); return refreshStatus(); })
+        .then(function (t) {
+          appendLog(t + '\n');
+          // Restore UI to initial state so setup can be rerun
+          convosJoined = false;
+          if (startSetupBtn) {
+            startSetupBtn.style.display = '';
+            startSetupBtn.disabled = false;
+            startSetupBtn.textContent = 'Start Setup';
+          }
+          if (completeSetupBtn) completeSetupBtn.style.display = 'none';
+          var qrImg = document.getElementById('convos-qr');
+          if (qrImg) qrImg.style.display = 'none';
+          var qrInfoEl = document.getElementById('qr-info');
+          if (qrInfoEl) qrInfoEl.style.display = 'none';
+          var loadingEl = document.getElementById('convos-loading');
+          if (loadingEl) {
+            loadingEl.innerHTML = '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="3" height="3" /><rect x="18" y="14" width="3" height="3" /><rect x="14" y="18" width="3" height="3" /><rect x="18" y="18" width="3" height="3" /></svg><p>Click "Start Setup" to begin</p>';
+            loadingEl.style.display = '';
+          }
+          return refreshStatus();
+        })
         .catch(function (e) { appendLog('Error: ' + String(e) + '\n'); });
     };
   }
