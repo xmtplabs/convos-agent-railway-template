@@ -753,7 +753,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     </div>
 
     <button id="completeSetup" class="btn-primary" disabled>
-      Finish Setup & Send Pairing Code
+      Finish Setup
     </button>
 
     <div id="setup-error" class="error-message"></div>
@@ -1006,6 +1006,9 @@ app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) 
     const pairingCode = codeMatch ? codeMatch[1] : null;
     console.log("[complete-setup] Parsed pairing code:", pairingCode);
 
+    // Stop the setup agent - we're done with the invite flow
+    await stopConvosAgent();
+
     if (!pairingCode) {
       return res.json({
         ok: true,
@@ -1016,29 +1019,11 @@ app.post("/setup/api/convos/complete-setup", requireSetupAuth, async (req, res) 
       });
     }
 
-    // Send pairing code to the Convos conversation
-    try {
-      await sendMessage(
-        `🔐 Your pairing code: ${pairingCode}\n\n` +
-        `Send this code back in this chat to complete setup and authenticate.`
-      );
-    } catch (msgErr) {
-      console.error("[convos] Failed to send pairing code:", msgErr);
-      return res.json({
-        ok: true,
-        output: onboard.output + `\n\nPairing code: ${pairingCode}\n` +
-                "(Could not auto-send to conversation - send manually)\n",
-        pairingCode
-      });
-    }
-
-    // Stop the setup agent now that we've sent the code
-    await stopConvosAgent();
-
+    // Return the pairing code to display in the UI
+    // User needs to send this code IN Convos to verify they're the same person
     res.json({
       ok: true,
-      output: onboard.output + "\n\n✅ Pairing code sent to your Convos conversation!\n" +
-              "Check the chat and send the code back to authenticate.\n",
+      output: onboard.output,
       pairingCode
     });
 

@@ -80,6 +80,33 @@
     }
   }
 
+  function showPairingCode(code) {
+    // Create a pairing code display element
+    var container = document.createElement('div');
+    container.style.cssText = 'margin-top: 24px; padding: 32px; background: #F0FDF4; border: 2px solid #22C55E; border-radius: 16px; text-align: center;';
+
+    var title = document.createElement('div');
+    title.style.cssText = 'font-size: 14px; color: #166534; margin-bottom: 16px; font-weight: 500;';
+    title.textContent = 'Send this code in Convos to complete pairing:';
+
+    var codeEl = document.createElement('div');
+    codeEl.style.cssText = 'font-size: 36px; font-weight: 700; font-family: SF Mono, Monaco, Courier New, monospace; letter-spacing: 4px; color: #000; margin-bottom: 16px;';
+    codeEl.textContent = code;
+
+    var hint = document.createElement('div');
+    hint.style.cssText = 'font-size: 13px; color: #666;';
+    hint.textContent = 'Open Convos and send this code as a message to verify your identity.';
+
+    container.appendChild(title);
+    container.appendChild(codeEl);
+    container.appendChild(hint);
+
+    // Insert after the complete setup button
+    if (completeSetupBtn && completeSetupBtn.parentNode) {
+      completeSetupBtn.parentNode.insertBefore(container, completeSetupBtn.nextSibling);
+    }
+  }
+
   function renderAuth(groups) {
     if (!authGroupEl) return;
     authGroupEl.innerHTML = '';
@@ -393,17 +420,22 @@
         completeSetupBtn.textContent = 'Setup Complete!';
         completeSetupBtn.classList.add('success');
         setStatus('Ready', 'success');
+
+        // If we got a pairing code, display it prominently
+        if (data.pairingCode) {
+          showPairingCode(data.pairingCode);
+        }
       } else {
         showError(data.error || 'Setup failed');
         completeSetupBtn.disabled = false;
-        completeSetupBtn.textContent = 'Finish Setup & Send Pairing Code';
+        completeSetupBtn.textContent = 'Finish Setup';
       }
       return refreshStatus();
     }).catch(function(err) {
       appendLog('\nError: ' + String(err) + '\n');
       showError(String(err));
       completeSetupBtn.disabled = false;
-      completeSetupBtn.textContent = 'Finish Setup & Send Pairing Code';
+      completeSetupBtn.textContent = 'Finish Setup';
     });
   }
 
