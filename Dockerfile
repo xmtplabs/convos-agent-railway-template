@@ -22,7 +22,7 @@ WORKDIR /openclaw
 
 # Configurable OpenClaw source - using xmtplabs fork with Convos channel
 # Bump OPENCLAW_CACHE_BUST to force a fresh clone (invalidates Docker cache)
-ARG OPENCLAW_CACHE_BUST=21
+ARG OPENCLAW_CACHE_BUST=22
 ARG OPENCLAW_GIT_REPO=https://github.com/xmtplabs/openclaw.git
 ARG OPENCLAW_GIT_REF=yewreeka/convos-channel
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" "${OPENCLAW_GIT_REPO}" .
