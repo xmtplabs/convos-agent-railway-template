@@ -309,6 +309,19 @@ app.use(express.json({ limit: "1mb" }));
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+// Build version info — baked into Docker image at build time.
+let _versionInfo;
+app.get("/version", (_req, res) => {
+  if (!_versionInfo) {
+    try {
+      _versionInfo = JSON.parse(fs.readFileSync(path.join(process.cwd(), "version.json"), "utf8"));
+    } catch {
+      _versionInfo = { error: "version.json not found" };
+    }
+  }
+  res.json(_versionInfo);
+});
+
 // --- Pool Mode Endpoints ---
 
 function requirePoolAuth(req, res, next) {

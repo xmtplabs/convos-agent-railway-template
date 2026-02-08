@@ -35,6 +35,8 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
+RUN git rev-parse HEAD > .git-commit
+
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
@@ -64,6 +66,15 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
+
+# Build version info for the /version endpoint.
+# RAILWAY_GIT_COMMIT_SHA is auto-provided by Railway at build time.
+ARG RAILWAY_GIT_COMMIT_SHA=unknown
+RUN printf '{"wrapper":"%s","openclaw":"%s","builtAt":"%s"}' \
+  "${RAILWAY_GIT_COMMIT_SHA}" \
+  "$(cat /openclaw/.git-commit 2>/dev/null || echo unknown)" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  > /app/version.json
 
 # Tell the gateway where to find bundled extensions (e.g. Convos channel).
 ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/openclaw/extensions
