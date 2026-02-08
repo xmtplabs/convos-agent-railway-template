@@ -100,6 +100,19 @@ const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}
 // XMTP environment (production or dev) - controlled via Railway env var
 const XMTP_ENV = process.env.XMTP_ENV || "production";
 
+// --- Pool Mode ---
+// When POOL_MODE=true, the instance auto-onboards on boot and exposes
+// /pool/status and /pool/provision endpoints for machine-to-machine use.
+const POOL_MODE = process.env.POOL_MODE === "true";
+const POOL_API_KEY = process.env.POOL_API_KEY?.trim();
+const POOL_AUTH_CHOICE = process.env.POOL_AUTH_CHOICE?.trim() || "openai-api-key";
+
+let poolReady = false;
+let poolProvisioned = false;
+let poolConversationId = null;
+let poolInviteUrl = null;
+let poolQrDataUrl = null;
+
 // Helper for calling Convos HTTP endpoints on the gateway.
 // The Convos plugin exposes REST routes at /convos/setup, /convos/setup/status, /convos/setup/complete.
 async function convosHttp(path, { method = "GET", body } = {}) {
@@ -231,13 +244,14 @@ async function startGateway() {
   });
 }
 
-async function ensureGatewayRunning() {
+async function ensureGatewayRunning(opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
       await startGateway();
-      const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
+      const ready = await waitForGatewayReady({ timeoutMs });
       if (!ready) {
         throw new Error("Gateway did not become ready in time");
       }
@@ -260,7 +274,8 @@ async function restartGateway() {
     await sleep(750);
     gatewayProc = null;
   }
-  return ensureGatewayRunning();
+  gatewayStarting = null;
+  return ensureGatewayRunning({ timeoutMs: 60_000 });
 }
 
 function requireSetupAuth(req, res, next) {
@@ -293,6 +308,126 @@ app.use(express.json({ limit: "1mb" }));
 
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
+
+// --- Pool Mode Endpoints ---
+
+function requirePoolAuth(req, res, next) {
+  if (!POOL_API_KEY) {
+    return res.status(500).json({ error: "POOL_API_KEY is not set" });
+  }
+  const header = req.headers.authorization || "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match || match[1] !== POOL_API_KEY) {
+    return res.status(401).json({ error: "Invalid or missing pool API key" });
+  }
+  return next();
+}
+
+app.get("/pool/status", requirePoolAuth, (_req, res) => {
+  res.json({
+    ready: poolReady,
+    provisioned: poolProvisioned,
+    conversationId: poolConversationId,
+    inviteUrl: poolInviteUrl,
+  });
+});
+
+app.post("/pool/provision", requirePoolAuth, async (req, res) => {
+  if (!poolReady) {
+    return res.status(503).json({ error: "Instance not ready yet" });
+  }
+  if (poolProvisioned) {
+    return res.status(409).json({
+      error: "Already provisioned",
+      conversationId: poolConversationId,
+      inviteUrl: poolInviteUrl,
+      qrDataUrl: poolQrDataUrl,
+    });
+  }
+
+  const { instructions } = req.body || {};
+  if (!instructions || typeof instructions !== "string") {
+    return res.status(400).json({ error: "instructions (string) is required" });
+  }
+
+  try {
+    // Write instructions to INSTRUCTIONS.md in the workspace directory.
+    // OpenClaw reads INSTRUCTIONS.md at runtime as operator-provided directives.
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(WORKSPACE_DIR, "INSTRUCTIONS.md"), instructions);
+    console.log("[pool] Wrote instructions to INSTRUCTIONS.md");
+
+    // Create XMTP conversation via the Convos plugin.
+    let result;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        result = await convosHttp("/convos/setup", {
+          method: "POST",
+          body: { env: XMTP_ENV, name: "Concierge" },
+        });
+        break;
+      } catch (err) {
+        if (attempt === 5) throw err;
+        console.log(`[pool] Setup attempt ${attempt} failed, retrying in 2s...`);
+        await sleep(2000);
+      }
+    }
+
+    poolProvisioned = true;
+    poolConversationId = result.conversationId;
+    poolInviteUrl = result.inviteUrl;
+    poolQrDataUrl = result.qrDataUrl;
+
+    console.log(`[pool] Provisioned. conversationId=${result.conversationId}`);
+    console.log(`[pool] Invite URL: ${result.inviteUrl}`);
+
+    // Start background polling to auto-complete setup when someone joins.
+    pollForJoinAndComplete();
+
+    res.json({
+      inviteUrl: result.inviteUrl,
+      qrDataUrl: result.qrDataUrl,
+      conversationId: result.conversationId,
+    });
+  } catch (err) {
+    console.error("[pool] Provision failed:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// After provision, poll /convos/setup/status until someone joins,
+// then auto-call /convos/setup/complete so the concierge starts responding.
+function pollForJoinAndComplete() {
+  const pollInterval = 2000;
+  const maxPollTime = 10 * 60 * 1000; // 10 minutes (matches plugin timeout)
+  const start = Date.now();
+
+  const timer = setInterval(async () => {
+    if (Date.now() - start > maxPollTime) {
+      console.log("[pool] Join polling timed out after 10 minutes");
+      clearInterval(timer);
+      return;
+    }
+
+    try {
+      const status = await convosHttp("/convos/setup/status");
+      if (status.joined) {
+        console.log(`[pool] User joined! inboxId=${status.joinerInboxId}`);
+        clearInterval(timer);
+
+        // Complete the setup to persist config and start the channel.
+        try {
+          await convosHttp("/convos/setup/complete", { method: "POST" });
+          console.log("[pool] Setup completed — concierge is live");
+        } catch (err) {
+          console.error("[pool] Failed to complete setup:", err);
+        }
+      }
+    } catch {
+      // Gateway might be restarting, ignore transient errors.
+    }
+  }, pollInterval);
+}
 
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
   // Serve JS for /setup (kept external to avoid inline encoding/template issues)
@@ -1670,7 +1805,8 @@ proxy.on("error", (err, _req, _res) => {
 
 app.use(async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
-  if (!isConfigured() && !req.path.startsWith("/setup")) {
+  // In pool mode, skip the redirect — the auto-boot will handle config.
+  if (!POOL_MODE && !isConfigured() && !req.path.startsWith("/setup")) {
     return res.redirect("/setup");
   }
 
@@ -1691,7 +1827,9 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
-  if (!SETUP_PASSWORD) {
+  if (POOL_MODE) {
+    console.log(`[wrapper] POOL MODE enabled (auth choice: ${POOL_AUTH_CHOICE})`);
+  } else if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
   }
   // Don't start gateway unless configured; proxy will ensure it starts.
@@ -1720,3 +1858,71 @@ process.on("SIGTERM", () => {
   }
   process.exit(0);
 });
+
+// --- Pool Mode: Auto-Boot ---
+// When POOL_MODE=true, auto-write config and start the gateway on container startup.
+// The instance will be marked as ready once the gateway is up.
+if (POOL_MODE) {
+  (async () => {
+    console.log("[pool] Pool mode enabled — auto-booting...");
+
+    if (!POOL_API_KEY) {
+      console.error("[pool] ERROR: POOL_API_KEY must be set in pool mode");
+      return;
+    }
+
+    const providerCfg = AUTH_PROVIDER_CONFIG[POOL_AUTH_CHOICE];
+    if (!providerCfg) {
+      console.error(`[pool] ERROR: Unknown POOL_AUTH_CHOICE="${POOL_AUTH_CHOICE}"`);
+      return;
+    }
+
+    // Verify the API key env var is set for the chosen provider.
+    if (providerCfg.envVar && !process.env[providerCfg.envVar]) {
+      console.error(`[pool] ERROR: ${providerCfg.envVar} must be set for auth choice "${POOL_AUTH_CHOICE}"`);
+      return;
+    }
+
+    // Write base config (same structure as the interactive setup).
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+    const config = {
+      gateway: {
+        mode: "local",
+        port: INTERNAL_GATEWAY_PORT,
+        bind: "loopback",
+        auth: { mode: "token", token: OPENCLAW_GATEWAY_TOKEN },
+        controlUi: { allowInsecureAuth: true },
+      },
+      plugins: {
+        load: { paths: ["/openclaw/extensions"] },
+      },
+    };
+
+    if (providerCfg.model) {
+      config.agents = { defaults: { model: { primary: providerCfg.model } } };
+      console.log(`[pool] Model: ${providerCfg.model}`);
+    }
+
+    if (providerCfg.customProvider) {
+      config.models = { mode: "merge", providers: providerCfg.customProvider };
+    }
+
+    fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
+    console.log("[pool] Config written");
+
+    // Start the gateway — pool mode gets a longer timeout since this is cold boot.
+    try {
+      await startGateway();
+      const ready = await waitForGatewayReady({ timeoutMs: 120_000 });
+      if (!ready) {
+        throw new Error("Gateway did not become ready within 120s");
+      }
+      poolReady = true;
+      console.log("[pool] Gateway is up — instance is READY for provision");
+    } catch (err) {
+      console.error("[pool] Failed to start gateway:", err);
+    }
+  })();
+}
