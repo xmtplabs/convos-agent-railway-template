@@ -345,10 +345,12 @@ app.post("/pool/provision", requirePoolAuth, async (req, res) => {
     });
   }
 
-  const { instructions } = req.body || {};
+  const { instructions, name } = req.body || {};
   if (!instructions || typeof instructions !== "string") {
     return res.status(400).json({ error: "instructions (string) is required" });
   }
+
+  const agentName = (typeof name === "string" && name.trim()) || "Agent";
 
   try {
     // Write instructions to INSTRUCTIONS.md in the workspace directory.
@@ -363,7 +365,7 @@ app.post("/pool/provision", requirePoolAuth, async (req, res) => {
       try {
         result = await convosHttp("/convos/setup", {
           method: "POST",
-          body: { env: XMTP_ENV, name: "Concierge" },
+          body: { env: XMTP_ENV, name: agentName, force: true },
         });
         break;
       } catch (err) {
@@ -398,7 +400,7 @@ app.post("/pool/provision", requirePoolAuth, async (req, res) => {
 // After provision, poll /convos/setup/status until someone joins,
 // then auto-call /convos/setup/complete so the concierge starts responding.
 function pollForJoinAndComplete() {
-  const pollInterval = 2000;
+  const pollInterval = 1000;
   const maxPollTime = 10 * 60 * 1000; // 10 minutes (matches plugin timeout)
   const start = Date.now();
 
@@ -418,7 +420,11 @@ function pollForJoinAndComplete() {
         // Complete the setup to persist config and start the channel.
         try {
           await convosHttp("/convos/setup/complete", { method: "POST" });
-          console.log("[pool] Setup completed — concierge is live");
+          console.log("[pool] Setup completed — restarting gateway for immediate activation");
+          // Force gateway restart so the convos channel reloads immediately
+          // instead of waiting for the file-watcher config-reload delay.
+          await restartGateway();
+          console.log("[pool] Gateway restarted — agent is live");
         } catch (err) {
           console.error("[pool] Failed to complete setup:", err);
         }
@@ -1919,6 +1925,42 @@ if (POOL_MODE) {
       if (!ready) {
         throw new Error("Gateway did not become ready within 120s");
       }
+      // Pre-warm XMTP identity: create an identity + runtime client now so that
+      // provision later only needs to create a new conversation (fast path).
+      try {
+        console.log("[pool] Pre-warming XMTP identity...");
+
+        // 1. Call /convos/setup to create XMTP identity + temporary conversation
+        let setupResult;
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          try {
+            setupResult = await convosHttp("/convos/setup", {
+              method: "POST",
+              body: { env: XMTP_ENV, name: "Agent" },
+            });
+            break;
+          } catch (err) {
+            if (attempt === 5) throw err;
+            console.log(`[pool] Pre-warm setup attempt ${attempt} failed, retrying in 2s...`);
+            await sleep(2000);
+          }
+        }
+        console.log(`[pool] Pre-warm: XMTP identity created (conversationId=${setupResult.conversationId})`);
+
+        // 2. Immediately complete setup to persist privateKey + config
+        await convosHttp("/convos/setup/complete", { method: "POST" });
+        console.log("[pool] Pre-warm: setup completed, config persisted");
+
+        // 3. Restart gateway so it picks up the convos channel config and
+        //    starts the runtime ConvosSDKClient with persistent DB.
+        await restartGateway();
+        console.log("[pool] Pre-warm: gateway restarted with XMTP runtime client");
+      } catch (err) {
+        // Pre-warm is best-effort — instance is still usable without it,
+        // provision will just take longer (cold XMTP identity creation).
+        console.warn("[pool] Pre-warm failed (non-fatal):", err.message || err);
+      }
+
       poolReady = true;
       console.log("[pool] Gateway is up — instance is READY for provision");
     } catch (err) {
