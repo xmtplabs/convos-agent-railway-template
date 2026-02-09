@@ -379,25 +379,12 @@ app.post("/pool/provision", requirePoolAuth, async (req, res) => {
       // --- Join existing conversation flow ---
       console.log(`[pool] Join mode: joining conversation via ${joinUrl.slice(0, 40)}...`);
 
-      // Join the conversation via the Convos plugin's HTTP route.
+      // Join the conversation and set profile name in one call (same as create flow).
       const joinResult = await convosHttp("/convos/join", {
         method: "POST",
-        body: { inviteUrl: joinUrl },
+        body: { inviteUrl: joinUrl, name: agentName },
       });
       console.log(`[pool] Joined conversation: ${joinResult.conversationId} (status: ${joinResult.status})`);
-
-      // Set the agent's display name in the conversation so it doesn't show "Somebody".
-      if (joinResult.conversationId) {
-        try {
-          await convosHttp("/convos/rename", {
-            method: "POST",
-            body: { conversationId: joinResult.conversationId, name: agentName },
-          });
-          console.log(`[pool] Set agent profile name to "${agentName}"`);
-        } catch (renameErr) {
-          console.warn("[pool] Failed to set agent profile name:", renameErr.message);
-        }
-      }
 
       if (!joinResult.conversationId) {
         return res.status(202).json({
