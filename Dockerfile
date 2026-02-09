@@ -22,9 +22,9 @@ WORKDIR /openclaw
 
 # Configurable OpenClaw source - using xmtplabs fork with Convos channel
 # Bump OPENCLAW_CACHE_BUST to force a fresh clone (invalidates Docker cache)
-ARG OPENCLAW_CACHE_BUST=32
+ARG OPENCLAW_CACHE_BUST=33
 ARG OPENCLAW_GIT_REPO=https://github.com/xmtplabs/openclaw.git
-ARG OPENCLAW_GIT_REF=saul/convos-system-prompt
+ARG OPENCLAW_GIT_REF=main
 RUN echo "cache-bust=${OPENCLAW_CACHE_BUST}" && git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" "${OPENCLAW_GIT_REPO}" .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
