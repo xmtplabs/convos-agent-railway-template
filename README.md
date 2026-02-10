@@ -1,70 +1,109 @@
-# OpenClaw Railway Template (1‑click deploy)
+# Convos Agent Railway Template
 
-This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
+A Railway-deployable container that runs an [OpenClaw](https://github.com/openclaw/openclaw) AI agent with [XMTP](https://xmtp.org) messaging via the Convos channel. Designed to be managed by a pool manager that provisions instances on demand, or run standalone with an interactive setup wizard.
 
-## What you get
+> **Origin:** This repo was originally forked from [vignesh07/clawdbot-railway-template](https://github.com/vignesh07/clawdbot-railway-template), which provides a general-purpose OpenClaw Railway template with 1-click deploy. This fork has diverged significantly to add XMTP/Convos integration, pool mode for automated provisioning, and multi-provider model support.
 
-- **OpenClaw Gateway + Control UI** (served at `/` and `/openclaw`)
-- A friendly **Setup Wizard** at `/setup` (protected by a password)
-- Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
-- One-click **Export backup** (so users can migrate off Railway later)
-- **Import backup** from `/setup` (advanced recovery)
+## How it works
 
-## How it works (high level)
+The container runs a lightweight Node.js wrapper server that:
 
-- The container runs a wrapper web server.
-- The wrapper protects `/setup` with `SETUP_PASSWORD`.
-- During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
-- After setup, **`/` is OpenClaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
+1. Builds OpenClaw from source (using the [xmtplabs/openclaw](https://github.com/xmtplabs/openclaw) fork with the Convos XMTP channel)
+2. Writes gateway config and starts the OpenClaw gateway as a child process
+3. Reverse-proxies all traffic (including WebSockets) to the internal gateway
+4. Exposes `/pool/*` endpoints for machine-to-machine provisioning
+5. Optionally serves a `/setup` web wizard for interactive configuration
 
-## Railway deploy instructions (what you’ll publish as a Template)
+## Modes of operation
 
-In Railway Template Composer:
+### Pool mode (`POOL_MODE=true`)
 
-1) Create a new template from this GitHub repo.
-2) Add a **Volume** mounted at `/data`.
-3) Set the following variables:
+Used when instances are managed by the [convos-agent-pool-manager](https://github.com/xmtplabs/convos-agent-pool-manager). On boot, the container:
 
-Required:
-- `SETUP_PASSWORD` — user-provided password to access `/setup`
+- Auto-writes OpenClaw config from environment variables
+- Starts the gateway and pre-warms an XMTP identity
+- Reports ready at `GET /pool/status`
+- Waits for `POST /pool/provision` with instructions, agent name, and optionally a group invite URL to join
 
-Recommended:
-- `OPENCLAW_STATE_DIR=/data/.openclaw`
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+This is the primary mode for production use.
 
-Optional:
-- `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
+### Interactive mode (default)
 
-Notes:
-- This template pins OpenClaw to a known-good version by default via Docker build arg `OPENCLAW_GIT_REF`.
+When `POOL_MODE` is not set, the container serves a setup wizard at `/setup` (protected by `SETUP_PASSWORD`). The wizard lets you:
 
-4) Enable **Public Networking** (HTTP). Railway will assign a domain.
-5) Deploy.
+- Choose an AI model provider and enter API credentials
+- Create an XMTP conversation with a QR code to scan
+- Configure Telegram, Discord, or Slack channels (if supported by the OpenClaw build)
+- Edit config, export/import backups, and run debug commands
 
-Then:
-- Visit `https://<your-app>.up.railway.app/setup`
-- Complete setup
-- Visit `https://<your-app>.up.railway.app/` and `/openclaw`
+## Environment variables
 
-## Getting chat tokens (so you don’t have to scramble)
+### Required (pool mode)
 
-### Telegram bot token
-1) Open Telegram and message **@BotFather**
-2) Run `/newbot` and follow the prompts
-3) BotFather will give you a token that looks like: `123456789:AA...`
-4) Paste that token into `/setup`
+| Variable | Description |
+|---|---|
+| `POOL_MODE` | Set to `true` to enable pool mode |
+| `POOL_API_KEY` | Bearer token for authenticating `/pool/*` requests |
+| `POOL_AUTH_CHOICE` | AI provider auth method (e.g. `openai-api-key`, `apiKey`) |
+| Provider API key | The relevant key for your chosen provider (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) |
 
-### Discord bot token
-1) Go to the Discord Developer Portal: https://discord.com/developers/applications
-2) **New Application** → pick a name
-3) Open the **Bot** tab → **Add Bot**
-4) Copy the **Bot Token** and paste it into `/setup`
-5) Invite the bot to your server (OAuth2 URL Generator → scopes: `bot`, `applications.commands`; then choose permissions)
+### Required (interactive mode)
 
-## Local smoke test
+| Variable | Description |
+|---|---|
+| `SETUP_PASSWORD` | Password to access the `/setup` wizard |
+
+### Optional
+
+| Variable | Default | Description |
+|---|---|---|
+| `XMTP_ENV` | `production` | XMTP network environment (`production` or `dev`) |
+| `OPENCLAW_STATE_DIR` | `~/.openclaw` | Where OpenClaw stores config and state |
+| `OPENCLAW_WORKSPACE_DIR` | `<state_dir>/workspace` | Agent workspace directory |
+| `OPENCLAW_GATEWAY_TOKEN` | auto-generated | Token for authenticating with the internal gateway |
+
+### Docker build args
+
+| Arg | Default | Description |
+|---|---|---|
+| `OPENCLAW_CACHE_BUST` | `35` | Bump to force a fresh `git clone` of OpenClaw (invalidates Docker cache) |
+| `OPENCLAW_GIT_REPO` | `https://github.com/xmtplabs/openclaw.git` | OpenClaw source repo |
+| `OPENCLAW_GIT_REF` | `staging` | Branch or tag to build from |
+
+## API endpoints
+
+### Pool endpoints (require `Authorization: Bearer <POOL_API_KEY>`)
+
+- `GET /pool/status` -- Returns `{ ready, provisioned, conversationId, inviteUrl }`
+- `POST /pool/provision` -- Provision the instance with `{ instructions, name, joinUrl? }`
+
+### Setup endpoints (require Basic auth with `SETUP_PASSWORD`)
+
+- `GET /setup` -- Interactive setup wizard
+- `GET /setup/healthz` -- Health check for Railway
+- `POST /setup/api/convos/setup` -- Start Convos XMTP setup
+- `POST /setup/api/convos/complete-setup` -- Finalize setup after user joins
+- `GET /setup/export` -- Download a `.tar.gz` backup
+- `POST /setup/import` -- Restore from a backup
+
+### Other
+
+- `GET /version` -- Build version info (wrapper commit, OpenClaw commit, build timestamp)
+- Everything else is reverse-proxied to the OpenClaw gateway
+
+## Supported AI providers
+
+The template supports a wide range of model providers out of the box:
+
+- **Anthropic** (API key, Claude Code CLI, setup token)
+- **OpenAI** (API key, Codex CLI, ChatGPT OAuth)
+- **Google** (Gemini API key, Antigravity OAuth, Gemini CLI)
+- **OpenRouter**, **Vercel AI Gateway**, **Moonshot AI**, **Z.AI**, **MiniMax**, **Qwen**, **GitHub Copilot**, **Synthetic**, **OpenCode Zen**
+
+## Local development
 
 ```bash
-docker build -t openclaw-railway-template .
+docker build -t convos-agent-template .
 
 docker run --rm -p 8080:8080 \
   -e PORT=8080 \
@@ -72,25 +111,11 @@ docker run --rm -p 8080:8080 \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
   -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
-  openclaw-railway-template
+  convos-agent-template
 
 # open http://localhost:8080/setup (password: test)
 ```
 
----
+## License
 
-## Official template / endorsements
-
-- Officially recommended by OpenClaw: <https://docs.openclaw.ai/railway>
-- Railway announcement (official): [Railway tweet announcing 1‑click OpenClaw deploy](https://x.com/railway/status/2015534958925013438)
-
-  ![Railway official tweet screenshot](assets/railway-official-tweet.jpg)
-
-- Endorsement from Railway CEO: [Jake Cooper tweet endorsing the OpenClaw Railway template](https://x.com/justjake/status/2015536083514405182)
-
-  ![Jake Cooper endorsement tweet screenshot](assets/railway-ceo-endorsement.jpg)
-
-- Created and maintained by **Vignesh N (@vignesh07)**
-- **1800+ deploys on Railway and counting** [Link to template on Railway](https://railway.com/deploy/clawdbot-railway-template)
-
-![Railway template deploy count](assets/railway-deploys.jpg)
+MIT -- see [LICENSE](LICENSE).
